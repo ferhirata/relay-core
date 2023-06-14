@@ -1,0 +1,64 @@
+name: CI-CD-GCP-DEV
+
+on:
+  workflow_dispatch:
+    inputs:
+      flag_prerelease:
+        description: "True to allow bypass prerealease condition"
+        required: true
+        type: boolean
+        default: true
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT }}
+  IMAGE: fullhistory-relay
+
+jobs:
+  setup-build-publish-deploy:
+    name: Setup, Build, Publish, and Deploy
+    runs-on: ubuntu-latest
+    environment: gcp-development
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    # Setup gcloud CLI
+    - uses: google-github-actions/setup-gcloud@94337306dda8180d967a56932ceb4ddcf01edae7
+      with:
+        service_account_key: ${{ secrets.GCP_SA_KEY }}
+        project_id: ${{ secrets.GCP_PROJECT }}
+
+    - name: Docker configuration
+      run: |-
+        gcloud auth configure-docker \
+        us-east1-docker.pkg.dev
+        
+    - name: Login to GCR
+      uses: docker/login-action@v1
+      with:
+        registry: gcr.io
+        username: _json_key
+        password: ${{ secrets.GCP_SA_KEY }}
+
+    # Build the Docker image
+    - name: Build
+      run: |-
+        docker build \
+          --tag "us-east1-docker.pkg.dev/${{ secrets.GCP_PROJECT }}/ar-dev-webapp/${{ env.IMAGE }}:dev" \
+          --build-arg GITHUB_SHA="$GITHUB_SHA" \
+          --build-arg GIT_ACCESS_TOKEN=${{ secrets.GIT_ACCESS_TOKEN }} \
+          .
+
+    # Push the Docker image to Google Container Registry
+    - name: Publish
+      run: |-
+        docker push "us-east1-docker.pkg.dev/${{ secrets.GCP_PROJECT }}/ar-dev-webapp/${{ env.IMAGE }}:dev"
+        
+    - id: 'deploy'
+      uses: 'google-github-actions/deploy-cloudrun@v1'
+      with:
+        service: 'run-4i-dev-4casthub-${{ env.IMAGE }}'
+        image: "us-east1-docker.pkg.dev/${{ secrets.GCP_PROJECT }}/ar-dev-webapp/${{ env.IMAGE }}:dev"
+        project_id: ${{ secrets.GCP_PROJECT }}
+        region: us-east1
